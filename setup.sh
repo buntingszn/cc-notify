@@ -503,6 +503,45 @@ print_client_instructions() {
     echo "  curl $auth_header -d 'Hello from cc-notify!' $BASE_URL/claude"
 }
 
+# --- Tailscale Serve ---
+
+setup_tailscale_serve() {
+    # Only run if the base URL looks like a Tailscale hostname
+    if [[ -z "$TAILSCALE_HOSTNAME" ]] || [[ "$BASE_URL" != *"$TAILSCALE_HOSTNAME"* ]]; then
+        return
+    fi
+
+    header "Tailscale Serve"
+
+    # Check if tailscale serve is already forwarding this port
+    if tailscale serve status 2>/dev/null | grep -q ":${PORT}"; then
+        ok "Tailscale Serve already configured for port ${PORT}"
+        return
+    fi
+
+    info "Tailscale Serve will expose ntfy at ${BASE_URL} over HTTPS."
+    info "Your phone (on the same tailnet) can reach it from anywhere."
+    echo
+
+    local setup_ts
+    setup_ts="$(prompt_choice "Configure Tailscale Serve now?" \
+        "Yes — run 'tailscale serve' (recommended)" \
+        "No — I'll set it up manually later")"
+
+    if [[ "$setup_ts" == "1" ]]; then
+        info "Running: sudo tailscale serve --bg --https 443 http://127.0.0.1:${PORT}"
+        if sudo tailscale serve --bg --https 443 "http://127.0.0.1:${PORT}" 2>&1; then
+            ok "Tailscale Serve configured: ${BASE_URL}"
+        else
+            warn "tailscale serve failed. You can set it up manually:"
+            echo "  sudo tailscale serve --bg --https 443 http://127.0.0.1:${PORT}"
+        fi
+    else
+        info "Set it up later with:"
+        echo "  sudo tailscale serve --bg --https 443 http://127.0.0.1:${PORT}"
+    fi
+}
+
 # --- Main ---
 
 main() {
@@ -559,20 +598,23 @@ main() {
     # Port
     PORT="$(prompt_value "Port for ntfy" "$DEFAULT_PORT")"
 
-    # Base URL
+    # Base URL — auto-detect Tailscale and default to HTTPS
     local default_base_url="http://127.0.0.1:${PORT}"
+    TAILSCALE_HOSTNAME=""
 
-    # Check for Tailscale
     if has_cmd tailscale; then
         local ts_hostname
         ts_hostname="$(tailscale status --self --json 2>/dev/null | python3 -c 'import sys,json; d=json.load(sys.stdin); print(d.get("Self",{}).get("DNSName","").rstrip("."))' 2>/dev/null)" || true
         if [[ -n "$ts_hostname" ]]; then
-            info "Tailscale detected: $ts_hostname"
-            info "You can use 'tailscale serve' later for remote HTTPS access."
+            TAILSCALE_HOSTNAME="$ts_hostname"
+            default_base_url="https://${ts_hostname}"
+            ok "Tailscale detected: $ts_hostname"
+            info "Defaulting base URL to https://${ts_hostname}"
+            info "This is the tested/recommended setup."
         fi
     fi
 
-    BASE_URL="$(prompt_value "Base URL" "$default_base_url")"
+    BASE_URL="$(prompt_value "Base URL (used in hooks and ntfy app)" "$default_base_url")"
 
     # Deploy
     case "$DEPLOY_METHOD" in
@@ -580,6 +622,9 @@ main() {
         docker) deploy_docker_compose ;;
         binary) deploy_bare_binary ;;
     esac
+
+    # Set up Tailscale Serve if using a Tailscale URL
+    setup_tailscale_serve
 
     # Create users and tokens
     create_user_and_token

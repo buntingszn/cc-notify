@@ -2,14 +2,21 @@
 
 Push notifications on your phone when Claude Code needs your input. Self-hosted [ntfy](https://ntfy.sh) server with Claude Code hooks — no data leaves your machine.
 
+> **Tested setup:** ntfy + Podman Quadlet + [Tailscale Serve](https://tailscale.com/kb/1312/serve) (HTTPS). Other deployment methods are supported but less battle-tested.
+
 ## How It Works
 
 ```
-Claude Code ──hook──▶ curl POST ──▶ ntfy (localhost:8098) ──▶ ntfy app (phone/browser)
+Claude Code ──hook──▶ curl POST ──▶ ntfy (127.0.0.1:8098)
                                          │
-                                    your machine
-                                   (nothing leaves)
+                                   tailscale serve
+                                         │
+                                    HTTPS on tailnet
+                                         │
+                                   ntfy app (phone)
 ```
+
+ntfy runs locally. Tailscale Serve exposes it over HTTPS to your tailnet — encrypted, no port forwarding, accessible from your phone anywhere. The hooks send to localhost; Tailscale handles the rest.
 
 Claude Code fires [hooks](https://docs.anthropic.com/en/docs/claude-code/hooks) on lifecycle events. Two matter here:
 
@@ -22,16 +29,21 @@ Claude Code fires [hooks](https://docs.anthropic.com/en/docs/claude-code/hooks) 
 
 You need **one** of:
 
-- **Podman** (Linux with systemd) — auto-starts via quadlet
+- **Podman** (Linux with systemd) — auto-starts via quadlet *(tested)*
 - **Docker** / Docker Compose — you manage lifecycle
 - **Neither** — setup downloads the ntfy binary directly
 
 Plus `openssl` and `curl` (almost certainly already installed).
 
+For push notifications on your phone, you also need:
+
+- **[Tailscale](https://tailscale.com/)** — provides HTTPS access to ntfy from your phone via `tailscale serve` *(tested, recommended)*
+- Or a reverse proxy (Caddy, nginx) with TLS — see [Remote Access](#remote-access-alternatives)
+
 ## Quick Start
 
 ```bash
-git clone https://github.com/yves-biener/cc-notify.git
+git clone https://github.com/buntingszn/cc-notify.git
 cd cc-notify
 chmod +x setup.sh
 ./setup.sh
@@ -123,7 +135,7 @@ ntfy serve --config ~/.local/share/cc-notify/server.yml
 
 ## Claude Code Hooks Configuration
 
-After setup, add the hooks to `~/.claude/settings.json`:
+After setup, add the hooks to `~/.claude/settings.json`. The hooks POST to your Tailscale HTTPS URL (or localhost if not using Tailscale):
 
 ```json
 {
@@ -134,7 +146,7 @@ After setup, add the hooks to `~/.claude/settings.json`:
         "hooks": [
           {
             "type": "command",
-            "command": "curl -s -H 'Authorization: Bearer YOUR_TOKEN' -H 'Title: Claude Code' -H 'Tags: robot' -d 'Claude is waiting for input' http://127.0.0.1:8098/claude"
+            "command": "curl -s -H 'Authorization: Bearer YOUR_TOKEN' -H 'Title: Claude Code' -H 'Tags: robot' -d 'Claude is waiting for input' https://your-host.tailnet-name.ts.net/claude"
           }
         ]
       }
@@ -145,7 +157,7 @@ After setup, add the hooks to `~/.claude/settings.json`:
         "hooks": [
           {
             "type": "command",
-            "command": "curl -s -H 'Authorization: Bearer YOUR_TOKEN' -H 'Title: Claude Code' -H 'Tags: bell' -d \"$CLAUDE_NOTIFICATION\" http://127.0.0.1:8098/claude"
+            "command": "curl -s -H 'Authorization: Bearer YOUR_TOKEN' -H 'Title: Claude Code' -H 'Tags: bell' -d \"$CLAUDE_NOTIFICATION\" https://your-host.tailnet-name.ts.net/claude"
           }
         ]
       }
@@ -154,7 +166,7 @@ After setup, add the hooks to `~/.claude/settings.json`:
 }
 ```
 
-The `setup.sh` script generates this with your actual token and URL.
+The `setup.sh` script generates this with your actual token and URL (auto-detects Tailscale hostname).
 
 ## Mobile / Browser Client Setup
 
@@ -162,13 +174,15 @@ The `setup.sh` script generates this with your actual token and URL.
 
 1. Install the [ntfy app](https://ntfy.sh/#subscribe-phone) from your app store
 2. Open the app → Settings → **Add default server**
-3. Enter your ntfy URL (e.g., `http://YOUR_IP:8098`)
+3. Enter your Tailscale ntfy URL (e.g., `https://your-host.tailnet-name.ts.net`)
 4. Go to Settings → **Manage users** → add your subscriber credentials
 5. Subscribe to the `claude` topic
 
+Your phone needs to be on your Tailscale network (install the Tailscale app if not already).
+
 ### Browser
 
-1. Open `http://127.0.0.1:8098` in your browser
+1. Open your ntfy URL (e.g., `https://your-host.tailnet-name.ts.net`)
 2. Log in with your subscriber credentials
 3. Subscribe to the `claude` topic
 4. Allow browser notifications when prompted
@@ -176,26 +190,36 @@ The `setup.sh` script generates this with your actual token and URL.
 ### Desktop (ntfy CLI)
 
 ```bash
-ntfy subscribe --token YOUR_SUBSCRIBER_TOKEN http://127.0.0.1:8098/claude
+ntfy subscribe --token YOUR_SUBSCRIBER_TOKEN https://your-host.tailnet-name.ts.net/claude
 ```
 
-## Remote Access (Optional)
+## Tailscale Serve (Recommended)
 
-If you want notifications on your phone away from home, you need to expose ntfy.
+The tested setup uses [Tailscale Serve](https://tailscale.com/kb/1312/serve) to expose ntfy over HTTPS on your tailnet. The `setup.sh` script offers to configure this automatically when Tailscale is detected.
 
-### Option A: Tailscale Serve (recommended)
-
-If you use [Tailscale](https://tailscale.com/), this is the simplest path:
+Manual setup:
 
 ```bash
-# Expose ntfy over HTTPS on your tailnet
-tailscale serve --bg https+insecure://127.0.0.1:8098
+# Expose ntfy over HTTPS on your tailnet (runs in background)
+sudo tailscale serve --bg --https 443 http://127.0.0.1:8098
 
 # Your ntfy is now at https://your-hostname.tailnet-name.ts.net
-# Use this URL in your phone's ntfy app
+# Use this as your base URL in hooks and the ntfy app
 ```
 
-### Option B: Reverse Proxy (Caddy)
+This gives you:
+- HTTPS with auto-provisioned TLS certificates
+- Accessible from any device on your tailnet (phone, laptop, etc.)
+- No port forwarding or public DNS needed
+- Works from anywhere (home, office, mobile data)
+
+Make sure your phone has the Tailscale app installed and is connected to the same tailnet.
+
+## Remote Access (Alternatives)
+
+If you don't use Tailscale, you can expose ntfy with a reverse proxy instead.
+
+### Caddy
 
 ```
 notify.example.com {
@@ -203,7 +227,7 @@ notify.example.com {
 }
 ```
 
-### Option C: Reverse Proxy (nginx)
+### nginx
 
 ```nginx
 server {
