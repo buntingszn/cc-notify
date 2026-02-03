@@ -1,0 +1,40 @@
+# ntfy server configuration for cc-notify
+# See https://docs.ntfy.sh/config/ for all options
+
+# Base URL — how clients reach this server.
+# For local-only use: http://127.0.0.1:{{PORT}}
+# For Tailscale Serve: https://your-hostname.tailnet-name.ts.net
+# For reverse proxy: https://notify.example.com
+base-url: "{{BASE_URL}}"
+
+# Listen address. Always bind to 127.0.0.1 unless you specifically
+# need LAN access (in which case use 0.0.0.0).
+listen-http: "127.0.0.1:{{PORT}}"
+
+# Data directory — stores user database, message cache, attachments.
+# Podman quadlet: /var/lib/ntfy (mapped to ~/.local/share/cc-notify)
+# Docker Compose: /var/lib/ntfy (mapped to ./data)
+# Bare binary: ~/.local/share/cc-notify
+cache-file: "/var/lib/ntfy/cache.db"
+auth-file: "/var/lib/ntfy/user.db"
+
+# Authentication — require auth for everything.
+# The setup script creates a publish-only token for hooks
+# and a subscriber user for your phone/browser.
+auth-default-access: "deny-all"
+
+# Message cache duration. 24h is plenty for notifications
+# you might miss while away from your phone.
+cache-duration: "24h"
+
+# Rate limiting — generous for local use.
+# Tighten these if you expose ntfy to the internet.
+visitor-request-limit-burst: 60
+visitor-request-limit-replenish: "1s"
+
+# Attachment settings (disabled — not needed for text notifications)
+attachment-total-size-limit: "0"
+
+# Logging
+log-level: "info"
+log-format: "text"

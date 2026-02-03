@@ -1,0 +1,26 @@
+{
+  "hooks": {
+    "Stop": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "curl -s -H 'Authorization: Bearer {{NTFY_TOKEN}}' -H 'Title: Claude Code' -H 'Tags: robot' -d 'Claude is waiting for input' {{NTFY_URL}}/claude"
+          }
+        ]
+      }
+    ],
+    "Notification": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "curl -s -H 'Authorization: Bearer {{NTFY_TOKEN}}' -H 'Title: Claude Code' -H 'Tags: bell' -d \"$CLAUDE_NOTIFICATION\" {{NTFY_URL}}/claude"
+          }
+        ]
+      }
+    ]
+  }
+}

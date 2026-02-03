@@ -1,0 +1,38 @@
+# Podman Quadlet unit for ntfy
+# Install to: ~/.config/containers/systemd/ntfy.container
+# Then: systemctl --user daemon-reload && systemctl --user start ntfy
+#
+# Data stored in: ~/.local/share/cc-notify/
+# Config at:      ~/.local/share/cc-notify/server.yml
+
+[Unit]
+Description=ntfy push notification server (cc-notify)
+After=network-online.target
+
+[Container]
+Image=docker.io/binwiederhier/ntfy:latest
+ContainerName=ntfy
+
+# Serve mode
+Exec=serve --config /etc/ntfy/server.yml
+
+# Mount config and data from user's home (%h = $HOME)
+Volume=%h/.local/share/cc-notify/server.yml:/etc/ntfy/server.yml:ro
+Volume=%h/.local/share/cc-notify:/var/lib/ntfy:rw
+
+# Network — host port matches container port
+PublishPort=8098:8098
+
+# Health check
+HealthCmd=curl -sf http://127.0.0.1:8098/v1/health || exit 1
+HealthInterval=30s
+HealthTimeout=5s
+HealthRetries=3
+
+[Service]
+Restart=on-failure
+RestartSec=10
+
+[Install]
+# Start on login
+WantedBy=default.target
