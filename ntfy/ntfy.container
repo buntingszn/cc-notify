@@ -17,11 +17,11 @@ ContainerName=ntfy
 Exec=serve --config /etc/ntfy/server.yml
 
 # Mount config and data from user's home (%h = $HOME)
-Volume=%h/.local/share/cc-notify/server.yml:/etc/ntfy/server.yml:ro
-Volume=%h/.local/share/cc-notify:/var/lib/ntfy:rw
+Volume=%h/.local/share/cc-notify/server.yml:/etc/ntfy/server.yml:ro,Z
+Volume=%h/.local/share/cc-notify:/var/lib/ntfy:Z
 
-# Network — host port matches container port
-PublishPort=8098:8098
+# Network — localhost only, Tailscale Serve handles external access
+PublishPort=127.0.0.1:8098:8098
 
 # Health check
 HealthCmd=curl -sf http://127.0.0.1:8098/v1/health || exit 1

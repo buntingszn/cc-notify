@@ -1,10 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# cc-notify setup — deploy ntfy with Podman Quadlet + auth for Claude Code hooks
+# cc-notify setup — deploy Bark or ntfy with Podman Quadlet for Claude Code hooks
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-DEFAULT_PORT=8098
 DATA_DIR="$HOME/.local/share/cc-notify"
 
 # --- Colors (disabled if not a terminal) ---
@@ -45,9 +44,9 @@ prompt_choice() {
     shift
     local options=("$@")
 
-    echo -e "\n${CYAN}?${RESET} ${prompt}"
+    echo -e "\n${CYAN}?${RESET} ${prompt}" >&2
     for i in "${!options[@]}"; do
-        echo -e "  ${BOLD}$((i + 1)))${RESET} ${options[$i]}"
+        echo -e "  ${BOLD}$((i + 1)))${RESET} ${options[$i]}" >&2
     done
 
     local choice
@@ -73,28 +72,20 @@ render_template() {
     echo "$content" > "$output"
 }
 
-copy_with_port() {
-    local src="$1" dest="$2"
-    local content
-    content="$(cat "$src")"
-    content="${content//8098:8098/${PORT}:${PORT}}"
-    content="${content//127.0.0.1:8098/127.0.0.1:${PORT}}"
-    echo "$content" > "$dest"
-}
-
 wait_for_healthy() {
-    info "Waiting for ntfy to start..."
+    local service_name="$1" health_endpoint="$2"
+    info "Waiting for ${service_name} to start..."
     local retries=0
-    while ! curl -sf "http://127.0.0.1:${PORT}/v1/health" &>/dev/null; do
+    while ! curl -sf "http://127.0.0.1:${PORT}${health_endpoint}" &>/dev/null; do
         sleep 1
         retries=$((retries + 1))
         if (( retries > 30 )); then
-            err "ntfy failed to start within 30 seconds"
-            err "Check: systemctl --user status ntfy"
+            err "${service_name} failed to start within 30 seconds"
+            err "Check: systemctl --user status ${service_name}"
             exit 1
         fi
     done
-    ok "ntfy is running"
+    ok "${service_name} is running"
 }
 
 # --- Tailscale ---
@@ -126,7 +117,7 @@ setup_tailscale_serve() {
         return
     fi
 
-    info "Tailscale Serve will expose ntfy at ${BASE_URL} over HTTPS."
+    info "Tailscale Serve will expose ${BACKEND} at ${BASE_URL} over HTTPS."
     info "Your phone (on the same tailnet) can reach it from anywhere."
     echo
 
@@ -149,9 +140,149 @@ setup_tailscale_serve() {
     fi
 }
 
-# --- Output ---
+# --- Bark ---
 
-print_hooks_config() {
+setup_bark() {
+    header "Deploying Bark with Podman Quadlet"
+
+    mkdir -p "$DATA_DIR"
+
+    local quadlet_dir="$HOME/.config/containers/systemd"
+    mkdir -p "$quadlet_dir"
+
+    # Bark container listens on 8080 internally; only the host port changes
+    local content
+    content="$(cat "$SCRIPT_DIR/bark/bark.container")"
+    content="${content//127.0.0.1:8099:8080/127.0.0.1:${PORT}:8080}"
+    echo "$content" > "$quadlet_dir/bark.container"
+    ok "Quadlet installed to $quadlet_dir/bark.container"
+
+    systemctl --user daemon-reload
+    systemctl --user start bark
+    wait_for_healthy "bark" "/healthz"
+
+    systemctl --user enable bark 2>/dev/null || true
+    ok "Enabled auto-start on login"
+
+    header "Bark Device Key"
+    echo "Register your phone with this bark server:"
+    echo "  1. Open the Bark app on your iPhone"
+    echo "  2. Tap \"Servers\" → add server: ${BASE_URL}"
+    echo "  3. Copy the device key shown for this server"
+    echo "  4. Paste it below"
+    echo
+    DEVICE_KEY="$(prompt_value "Bark device key" "")"
+
+    if [[ -z "$DEVICE_KEY" ]]; then
+        err "Device key is required. Add your server in the Bark app first."
+        exit 1
+    fi
+}
+
+print_bark_hooks() {
+    header "Claude Code Hooks Configuration"
+
+    local hooks_file="$DATA_DIR/hooks.json"
+    cat > "$hooks_file" <<HOOKS
+{
+  "hooks": {
+    "Stop": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "curl -s -H 'Content-Type: application/json' -d '{\"device_key\":\"${DEVICE_KEY}\",\"title\":\"Claude Code\",\"body\":\"Claude is waiting for input\",\"group\":\"claude\"}' ${BASE_URL}/push"
+          }
+        ]
+      }
+    ],
+    "Notification": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "jq -r '.message // empty' | grep . | jq -Rsc '{\"device_key\":\"${DEVICE_KEY}\",\"title\":\"Claude Code\",\"body\":.,\"group\":\"claude\"}' | curl -s -H 'Content-Type: application/json' -d @- ${BASE_URL}/push"
+          }
+        ]
+      }
+    ]
+  }
+}
+HOOKS
+
+    echo -e "Add this to ${BOLD}~/.claude/settings.json${RESET}:"
+    echo
+    cat "$hooks_file"
+    echo
+    warn "Copy the hooks block above into your settings file."
+    ok "Hooks config also saved to $hooks_file"
+}
+
+print_bark_instructions() {
+    header "Client Setup"
+
+    echo -e "${BOLD}Phone (Bark app):${RESET}"
+    echo "  1. Install Bark from the App Store"
+    echo "  2. Open Bark → tap \"Servers\" → add your server: $BASE_URL"
+    echo "  3. Notifications arrive automatically — no topics to subscribe to"
+    echo
+
+    echo -e "${BOLD}Test it:${RESET}"
+    echo "  curl -H 'Content-Type: application/json' \\"
+    echo "    -d '{\"device_key\":\"${DEVICE_KEY}\",\"title\":\"Test\",\"body\":\"Hello from cc-notify!\"}' \\"
+    echo "    $BASE_URL/push"
+}
+
+# --- ntfy ---
+
+setup_ntfy() {
+    # Generate credentials
+    SUB_USERNAME="claude-user"
+    SUB_PASSWORD="$(openssl rand -hex 12)"
+    HOOKS_TOKEN="tk_$(openssl rand -hex 15 | head -c 29)"
+
+    header "Deploying ntfy with Podman Quadlet"
+
+    mkdir -p "$DATA_DIR"
+    render_template "$SCRIPT_DIR/ntfy/server.yml.template" "$DATA_DIR/server.yml"
+    ok "Config written to $DATA_DIR/server.yml"
+
+    local quadlet_dir="$HOME/.config/containers/systemd"
+    mkdir -p "$quadlet_dir"
+
+    # ntfy host and container ports are the same
+    local content
+    content="$(cat "$SCRIPT_DIR/ntfy/ntfy.container")"
+    content="${content//8098:8098/${PORT}:${PORT}}"
+    content="${content//127.0.0.1:8098/127.0.0.1:${PORT}}"
+    echo "$content" > "$quadlet_dir/ntfy.container"
+    ok "Quadlet installed to $quadlet_dir/ntfy.container"
+
+    systemctl --user daemon-reload
+    systemctl --user start ntfy
+    wait_for_healthy "ntfy" "/v1/health"
+
+    systemctl --user enable ntfy 2>/dev/null || true
+    ok "Enabled auto-start on login"
+
+    # Create users and set access
+    header "Setting up authentication"
+
+    echo "$SUB_PASSWORD" | podman exec -i ntfy ntfy user add --role=user "$SUB_USERNAME" 2>/dev/null || true
+    ok "Created subscriber user: $SUB_USERNAME"
+
+    local hooks_password
+    hooks_password="$(openssl rand -hex 16)"
+    echo "$hooks_password" | podman exec -i ntfy ntfy user add --role=user "claude-hooks" 2>/dev/null || true
+
+    podman exec ntfy ntfy access "$SUB_USERNAME" 'claude' read-write 2>/dev/null || true
+    podman exec ntfy ntfy access "claude-hooks" 'claude' write-only 2>/dev/null || true
+    ok "Authentication configured"
+}
+
+print_ntfy_hooks() {
     header "Claude Code Hooks Configuration"
 
     local hooks_file="$DATA_DIR/hooks.json"
@@ -192,7 +323,7 @@ HOOKS
     ok "Hooks config also saved to $hooks_file"
 }
 
-print_client_instructions() {
+print_ntfy_instructions() {
     header "Client Setup"
 
     echo -e "${BOLD}Phone (ntfy app):${RESET}"
@@ -219,12 +350,12 @@ print_client_instructions() {
 
 main() {
     header "cc-notify setup"
-    echo "Self-hosted ntfy for Claude Code push notifications."
+    echo "Self-hosted push notifications for Claude Code."
     echo
 
     # Check prerequisites
     local missing=()
-    for cmd in curl jq openssl podman systemctl; do
+    for cmd in curl jq podman systemctl; do
         has_cmd "$cmd" || missing+=("$cmd")
     done
     if (( ${#missing[@]} > 0 )); then
@@ -234,8 +365,26 @@ main() {
         exit 1
     fi
 
+    # Backend choice
+    BACKEND="$(prompt_choice "Which notification backend?" \
+        "Bark — iOS app, simple device key auth (recommended)" \
+        "ntfy — Android + iOS + browser, topic-based with user auth")"
+
+    if [[ "$BACKEND" == "1" ]]; then
+        BACKEND="bark"
+        local default_port=8099
+    else
+        BACKEND="ntfy"
+        local default_port=8098
+        # ntfy needs openssl for credential generation
+        if ! has_cmd openssl; then
+            err "Missing required command: openssl (needed for ntfy credential generation)"
+            exit 1
+        fi
+    fi
+
     # Port
-    PORT="$(prompt_value "Port for ntfy" "$DEFAULT_PORT")"
+    PORT="$(prompt_value "Port for ${BACKEND}" "$default_port")"
 
     # Base URL — auto-detect Tailscale and default to HTTPS
     local default_base_url="http://127.0.0.1:${PORT}"
@@ -250,56 +399,34 @@ main() {
         info "Defaulting base URL to https://${ts_hostname}"
     fi
 
-    BASE_URL="$(prompt_value "Base URL (used in hooks and ntfy app)" "$default_base_url")"
+    BASE_URL="$(prompt_value "Base URL (used in hooks and app config)" "$default_base_url")"
 
-    # Generate credentials
-    SUB_USERNAME="claude-user"
-    SUB_PASSWORD="$(openssl rand -hex 12)"
-    HOOKS_TOKEN="tk_$(openssl rand -hex 15 | head -c 29)"
-
-    # Deploy with Podman Quadlet
-    header "Deploying with Podman Quadlet"
-
-    mkdir -p "$DATA_DIR"
-    render_template "$SCRIPT_DIR/ntfy/server.yml.template" "$DATA_DIR/server.yml"
-    ok "Config written to $DATA_DIR/server.yml"
-
-    local quadlet_dir="$HOME/.config/containers/systemd"
-    mkdir -p "$quadlet_dir"
-    copy_with_port "$SCRIPT_DIR/ntfy/ntfy.container" "$quadlet_dir/ntfy.container"
-    ok "Quadlet installed to $quadlet_dir/ntfy.container"
-
-    systemctl --user daemon-reload
-    systemctl --user start ntfy
-    wait_for_healthy
-
-    systemctl --user enable ntfy 2>/dev/null || true
-    ok "Enabled auto-start on login"
-
-    # Create users and set access via podman exec
-    header "Setting up authentication"
-
-    echo "$SUB_PASSWORD" | podman exec -i ntfy ntfy user add --role=user "$SUB_USERNAME" 2>/dev/null || true
-    ok "Created subscriber user: $SUB_USERNAME"
-
-    local hooks_password
-    hooks_password="$(openssl rand -hex 16)"
-    echo "$hooks_password" | podman exec -i ntfy ntfy user add --role=user "claude-hooks" 2>/dev/null || true
-
-    podman exec ntfy ntfy access "$SUB_USERNAME" 'claude' read-write 2>/dev/null || true
-    podman exec ntfy ntfy access "claude-hooks" 'claude' write-only 2>/dev/null || true
-    ok "Authentication configured"
+    # Deploy backend
+    if [[ "$BACKEND" == "bark" ]]; then
+        setup_bark
+    else
+        setup_ntfy
+    fi
 
     # Tailscale Serve
     setup_tailscale_serve
 
     # Output
-    print_hooks_config
-    print_client_instructions
+    if [[ "$BACKEND" == "bark" ]]; then
+        print_bark_hooks
+        print_bark_instructions
+    else
+        print_ntfy_hooks
+        print_ntfy_instructions
+    fi
 
     header "Done!"
-    echo "ntfy is running at $BASE_URL"
-    echo "Subscribe to the 'claude' topic in your ntfy app to receive notifications."
+    echo "${BACKEND} is running at $BASE_URL"
+    if [[ "$BACKEND" == "bark" ]]; then
+        echo "Notifications will be pushed directly to your Bark app."
+    else
+        echo "Subscribe to the 'claude' topic in your ntfy app to receive notifications."
+    fi
 }
 
 main "$@"

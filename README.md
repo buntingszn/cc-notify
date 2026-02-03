@@ -2,7 +2,7 @@
 
 Get push notifications on your phone when your AI coding agent needs your input.
 
-Runs a self-hosted [ntfy](https://ntfy.sh) server and wires it into your agent's hook system. Built for [Claude Code](https://docs.anthropic.com/en/docs/claude-code), works with [Cursor](#other-tools), [Gemini CLI](#other-tools), and [others](#other-tools).
+Runs a self-hosted [Bark](https://github.com/Finb/Bark) or [ntfy](https://ntfy.sh) server and wires it into your agent's hook system. Built for [Claude Code](https://docs.anthropic.com/en/docs/claude-code), works with [Cursor](#other-tools), [Gemini CLI](#other-tools), and [others](#other-tools).
 
 With [Tailscale Serve](https://tailscale.com/kb/1312/serve), notifications travel over a direct WireGuard tunnel — no third-party server ever sees your messages.
 
@@ -14,22 +14,46 @@ cd cc-notify
 ./setup.sh
 ```
 
-The setup script will:
+The setup script prompts you to choose a backend:
 
-1. Deploy ntfy as a Podman Quadlet (auto-starts on login)
-2. Generate subscriber credentials and a hooks bearer token
-3. Configure Tailscale Serve for HTTPS access from your phone
-4. Print the hooks JSON for `~/.claude/settings.json`
+1. **Bark** (recommended) — deploys bark-server, prompts for your device key, prints hooks JSON
+2. **ntfy** — deploys ntfy with generated credentials and bearer token, prints hooks JSON
+
+Both paths deploy as a Podman Quadlet (auto-starts on login) and optionally configure Tailscale Serve for HTTPS access from your phone.
 
 ### Requirements
 
 - **Linux** with **Podman** and **systemd**
 - **[Tailscale](https://tailscale.com/)** for phone notifications *(recommended)*
-- `curl`, `jq`, `openssl`
+- `curl`, `jq` (ntfy also needs `openssl`)
 
-## Subscribing to Notifications
+## Bark vs ntfy
 
-After running `setup.sh`, subscribe on your phone or browser using the generated credentials.
+Bark and ntfy are both self-hosted notification servers. They take different approaches:
+
+**Bark** is purpose-built for Apple Push Notification service (APNs). Your self-hosted server talks directly to Apple — no relay, no middle server. Setup is minimal: install the iOS app, copy your device key, done. The trade-off is that it's iOS-only and has no web UI.
+
+**ntfy** is a general-purpose pub/sub notification server. It supports Android, iOS, and browser notifications. It has a web UI, topic-based routing, user auth with granular ACLs, and attachments. The trade-off is more moving parts: you manage users, tokens, topics, and an `upstream-base-url` relay for iOS push delivery.
+
+| | Bark | ntfy |
+|---|---|---|
+| **iOS push** | Direct to APNs (no relay) | Via ntfy.sh relay (message ID only) |
+| **Android** | No | Yes |
+| **Browser** | No | Yes |
+| **Auth model** | Device key (one token) | Users + topics + ACLs |
+| **Setup** | Install app, paste key | Install app, configure server, add user, subscribe to topic |
+| **Config files** | None | `server.yml` |
+| **Web UI** | No | Yes |
+
+## Subscribing — Bark (default)
+
+1. Install [Bark](https://apps.apple.com/us/app/bark-customed-notifications/id1403753865) from the App Store
+2. Open Bark → tap **Servers** → add your server URL (e.g., `https://your-host.ts.net`)
+3. Notifications arrive automatically — no topics to subscribe to
+
+Your phone must be on your Tailscale network (if using Tailscale Serve).
+
+## Subscribing — ntfy (alternative)
 
 ### Phone
 
@@ -49,30 +73,61 @@ Your phone must be on your Tailscale network.
 
 ## How It Works
 
+**Bark:**
+
 ```
-agent ──hook──▶ jq + curl ──▶ ntfy (127.0.0.1:8098) ──tailscale serve──▶ phone
-                                       │
-                                       └──▶ ntfy.sh (message ID only, for iOS push)
+agent ──hook──> jq + curl ──> bark (127.0.0.1:8099) ──APNs──> iPhone
 ```
 
-ntfy runs on localhost. Agent hooks fire shell commands that POST to ntfy. Two events are wired up:
+**ntfy:**
+
+```
+agent ──hook──> jq + curl ──> ntfy (127.0.0.1:8098) ──tailscale serve──> phone
+                                       │
+                                       └──> ntfy.sh (message ID only, for iOS push)
+```
+
+Both backends run on localhost. Agent hooks fire shell commands that POST notifications. Two events are wired up:
 
 | Hook | Fires when | Notification |
 |------|-----------|--------------|
 | **Stop** | Agent finishes and waits for input | "Claude is waiting for input" |
 | **Notification** | Agent sends a notification | The message content (parsed from stdin JSON via `jq`) |
 
-Tailscale Serve exposes ntfy over HTTPS to your tailnet — auto-provisioned TLS, no port forwarding, accessible from any device on your network.
+Tailscale Serve exposes the backend over HTTPS to your tailnet — auto-provisioned TLS, no port forwarding, accessible from any device on your network.
 
 > **Note:** Claude Code hooks work regardless of which model provider you use (Anthropic, OpenAI, Google, Bedrock, etc.). The hooks are a client-side feature.
 
 ## Other Tools
 
-The ntfy server and Tailscale setup are tool-agnostic. Only the hooks configuration differs per tool. After running `setup.sh`, adapt the generated `curl` commands to your tool's config format.
+The notification server and Tailscale setup are tool-agnostic. Only the hooks configuration differs per tool. After running `setup.sh`, adapt the generated `curl` commands to your tool's config format.
 
 ### Cursor
 
-Cursor hooks use nearly identical JSON. Place in `.cursor/hooks.json` at your project root:
+Place in `.cursor/hooks.json` at your project root.
+
+**Bark:**
+
+```json
+{
+  "version": 1,
+  "hooks": {
+    "stop": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "curl -s -H 'Content-Type: application/json' -d '{\"device_key\":\"YOUR_KEY\",\"title\":\"Cursor\",\"body\":\"Cursor is waiting for input\",\"group\":\"claude\"}' https://your-host.ts.net/push"
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+**ntfy:**
 
 ```json
 {
@@ -95,7 +150,23 @@ Cursor hooks use nearly identical JSON. Place in `.cursor/hooks.json` at your pr
 
 ### Gemini CLI
 
-Gemini CLI hooks go in `.gemini/settings.json`:
+Gemini CLI hooks go in `.gemini/settings.json`.
+
+**Bark:**
+
+```json
+{
+  "hooks": {
+    "Notification": [
+      {
+        "command": "jq -r '.message // empty' | grep . | jq -Rsc '{\"device_key\":\"YOUR_KEY\",\"title\":\"Gemini CLI\",\"body\":.,\"group\":\"claude\"}' | curl -s -H 'Content-Type: application/json' -d @- https://your-host.ts.net/push"
+      }
+    ]
+  }
+}
+```
+
+**ntfy:**
 
 ```json
 {
@@ -111,24 +182,41 @@ Gemini CLI hooks go in `.gemini/settings.json`:
 
 ### Aider
 
-Aider supports a simple notification command flag:
-
 ```bash
+# Bark
+aider --notifications-command "curl -s -H 'Content-Type: application/json' -d '{\"device_key\":\"YOUR_KEY\",\"title\":\"Aider\",\"body\":\"Aider is waiting for input\",\"group\":\"claude\"}' https://your-host.ts.net/push"
+
+# ntfy
 aider --notifications-command "curl -s -H 'Authorization: Bearer YOUR_TOKEN' -d 'Aider is waiting for input' https://your-host.ts.net/claude"
 ```
 
 ### Codex CLI
 
-Codex uses `config.toml`. Add under `[notify]`:
+Add under `[notify]` in `config.toml`:
 
 ```toml
+# Bark
+[notify]
+command = "curl -s -H 'Content-Type: application/json' -d '{\"device_key\":\"YOUR_KEY\",\"title\":\"Codex\",\"body\":\"Codex is waiting for input\",\"group\":\"claude\"}' https://your-host.ts.net/push"
+
+# ntfy
 [notify]
 command = "curl -s -H 'Authorization: Bearer YOUR_TOKEN' -d 'Codex is waiting for input' https://your-host.ts.net/claude"
 ```
 
 ### Any tool with shell hooks
 
-The core notification is a single `curl` command. If your tool can run a shell command on completion, use:
+The core notification is a single `curl` command. Replace placeholders with values from `~/.local/share/cc-notify/hooks.json`.
+
+**Bark:**
+
+```bash
+curl -s -H 'Content-Type: application/json' \
+  -d '{"device_key":"YOUR_KEY","title":"My Agent","body":"Agent is waiting","group":"claude"}' \
+  https://your-host.ts.net/push
+```
+
+**ntfy:**
 
 ```bash
 curl -s \
@@ -139,9 +227,19 @@ curl -s \
   https://your-host.ts.net/claude
 ```
 
-Replace `YOUR_TOKEN` and the URL with values from `~/.local/share/cc-notify/hooks.json`.
-
 ## Security
+
+### Bark
+
+- The bark-server **binds to localhost only** (`127.0.0.1`). It is not reachable from your LAN without Tailscale Serve.
+- The **device key** is the only credential. Anyone with it can push to your device.
+- Bark pushes directly to **Apple Push Notification service** — no relay server involved.
+- With Tailscale Serve, traffic is encrypted over a WireGuard tunnel. Without it, traffic stays on loopback.
+- The Bark iOS app supports **end-to-end encryption** — enable it in the app's settings if you're sending sensitive content. When enabled, notifications are encrypted on the sender and decrypted on-device; the bark-server only sees ciphertext.
+
+### ntfy
+
+- The ntfy server **binds to localhost only** (`127.0.0.1`). It is not reachable from your LAN without Tailscale Serve.
 
 **With Tailscale Serve** (recommended):
 
@@ -164,14 +262,32 @@ Replace `YOUR_TOKEN` and the URL with values from `~/.local/share/cc-notify/hook
 - The hooks user has **write-only** access (can publish, cannot subscribe).
 - The subscriber user has **read-write** access.
 - Hooks bearer token is declared in `server.yml` (generated via `openssl rand`).
-- Subscriber credentials are auto-generated during setup.
 
 ## Manual Setup
 
-If you prefer not to use `setup.sh`:
+<details>
+<summary><strong>Bark — Podman Quadlet</strong></summary>
+
+```bash
+mkdir -p ~/.local/share/cc-notify
+mkdir -p ~/.config/containers/systemd
+cp bark/bark.container ~/.config/containers/systemd/
+systemctl --user daemon-reload
+systemctl --user start bark
+
+# Verify
+curl http://127.0.0.1:8099/healthz
+
+# Test push (use your device key from the Bark app)
+curl -H 'Content-Type: application/json' \
+  -d '{"device_key":"YOUR_KEY","title":"Test","body":"Hello!"}' \
+  http://127.0.0.1:8099/push
+```
+
+</details>
 
 <details>
-<summary><strong>Podman Quadlet (Linux + systemd)</strong></summary>
+<summary><strong>ntfy — Podman Quadlet</strong></summary>
 
 ```bash
 mkdir -p ~/.local/share/cc-notify
@@ -198,12 +314,34 @@ podman exec ntfy ntfy access claude-hooks claude write-only
 <summary><strong>Tailscale Serve (manual)</strong></summary>
 
 ```bash
-sudo tailscale serve --bg --https 443 http://127.0.0.1:8098
+sudo tailscale serve --bg --https 443 http://127.0.0.1:8099   # Bark
+sudo tailscale serve --bg --https 443 http://127.0.0.1:8098   # ntfy
 ```
 
 </details>
 
 ## Troubleshooting
+
+### Bark
+
+**Test push directly:**
+
+```bash
+curl -H 'Content-Type: application/json' \
+  -d '{"device_key":"YOUR_KEY","title":"Test","body":"Hello!"}' \
+  http://127.0.0.1:8099/push
+```
+
+**Check bark is running:**
+
+```bash
+systemctl --user status bark
+curl http://127.0.0.1:8099/healthz
+```
+
+**No notification on phone:** Verify your device key is correct (shown on the Bark app main screen). Check that your phone is on the same Tailscale network if using Tailscale Serve.
+
+### ntfy
 
 **Test ntfy directly:**
 
@@ -218,11 +356,13 @@ systemctl --user status ntfy
 curl http://127.0.0.1:8098/v1/health
 ```
 
-**Hook not firing:** hooks log to stderr in your terminal. Test the `curl` command from the hooks config manually.
+**iOS notifications not instant:** Verify `upstream-base-url: "https://ntfy.sh"` is set in `~/.local/share/cc-notify/server.yml`.
+
+### General
+
+**Hook not firing:** Hooks log to stderr in your terminal. Test the `curl` command from the hooks config manually.
 
 **Podman permission denied:** `systemctl --user enable --now podman.socket`
-
-**iOS notifications not instant:** verify `upstream-base-url: "https://ntfy.sh"` is set in `~/.local/share/cc-notify/server.yml`.
 
 ## License
 

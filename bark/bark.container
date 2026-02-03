@@ -1,0 +1,29 @@
+# Podman Quadlet unit for Bark
+# Install to: ~/.config/containers/systemd/bark.container
+# Then: systemctl --user daemon-reload && systemctl --user start bark
+#
+# Data stored in: ~/.local/share/cc-notify/
+
+[Unit]
+Description=Bark push notification server (cc-notify)
+After=network-online.target
+
+[Container]
+Image=docker.io/finab/bark-server:latest
+ContainerName=bark
+Volume=%h/.local/share/cc-notify:/data:Z
+# Host port 8099 (configurable), container port 8080 (fixed)
+PublishPort=127.0.0.1:8099:8080
+
+# Health check runs inside the container — always port 8080
+HealthCmd=curl -sf http://127.0.0.1:8080/healthz || exit 1
+HealthInterval=30s
+HealthTimeout=5s
+HealthRetries=3
+
+[Service]
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=default.target
