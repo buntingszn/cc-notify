@@ -16,20 +16,20 @@ cd cc-notify
 
 The setup script will:
 
-1. Detect your OS and container runtime (Podman, Docker, or neither)
-2. Deploy ntfy with authentication enabled
+1. Deploy ntfy as a Podman Quadlet (auto-starts on login)
+2. Generate subscriber credentials and a hooks bearer token
 3. Configure Tailscale Serve for HTTPS access from your phone
-4. Generate the hooks JSON for `~/.claude/settings.json`
+4. Print the hooks JSON for `~/.claude/settings.json`
 
 ### Requirements
 
-- **Podman** *(tested)*, Docker, or neither (downloads the ntfy binary)
-- **[Tailscale](https://tailscale.com/)** for phone notifications *(tested, recommended)*
+- **Linux** with **Podman** and **systemd**
+- **[Tailscale](https://tailscale.com/)** for phone notifications *(recommended)*
 - `curl`, `jq`, `openssl`
 
 ## Subscribing to Notifications
 
-After running `setup.sh`, subscribe on your phone or browser.
+After running `setup.sh`, subscribe on your phone or browser using the generated credentials.
 
 ### Phone
 
@@ -40,6 +40,8 @@ After running `setup.sh`, subscribe on your phone or browser.
 
 Your phone must be on your Tailscale network.
 
+> **iOS push delivery:** The server forwards message IDs (not content) to ntfy.sh so the iOS app can receive instant push notifications. Your actual notification text never leaves your server.
+
 ### Browser
 
 1. Open your ntfy URL and log in with your subscriber credentials
@@ -48,7 +50,9 @@ Your phone must be on your Tailscale network.
 ## How It Works
 
 ```
-agent ──hook──▶ jq + curl ──▶ ntfy (127.0.0.1:8098) ──▶ tailscale serve ──▶ phone
+agent ──hook──▶ jq + curl ──▶ ntfy (127.0.0.1:8098) ──tailscale serve──▶ phone
+                                       │
+                                       └──▶ ntfy.sh (message ID only, for iOS push)
 ```
 
 ntfy runs on localhost. Agent hooks fire shell commands that POST to ntfy. Two events are wired up:
@@ -149,16 +153,22 @@ Replace `YOUR_TOKEN` and the URL with values from `~/.local/share/cc-notify/hook
 
 - All traffic stays on `127.0.0.1`. Only useful for same-machine browser notifications.
 
+**iOS push delivery** (`upstream-base-url`):
+
+- ntfy forwards only the message ID to ntfy.sh so the iOS app receives instant push notifications.
+- The actual notification content is fetched directly from your server by the app — ntfy.sh never sees it.
+
 **ntfy auth model:**
 
 - Anonymous access is disabled (`auth-default-access: deny-all`).
 - The hooks user has **write-only** access (can publish, cannot subscribe).
 - The subscriber user has **read-write** access.
-- Tokens are generated via `openssl rand`.
+- Hooks bearer token is declared in `server.yml` (generated via `openssl rand`).
+- Subscriber credentials are auto-generated during setup.
 
 ## Manual Setup
 
-If you prefer not to use `setup.sh`, expand the relevant method below.
+If you prefer not to use `setup.sh`:
 
 <details>
 <summary><strong>Podman Quadlet (Linux + systemd)</strong></summary>
@@ -166,47 +176,20 @@ If you prefer not to use `setup.sh`, expand the relevant method below.
 ```bash
 mkdir -p ~/.local/share/cc-notify
 cp ntfy/server.yml.template ~/.local/share/cc-notify/server.yml
-# Edit server.yml: set base-url and listen-http
+# Edit server.yml: set base-url, listen-http, and auth-tokens
 
 mkdir -p ~/.config/containers/systemd
 cp ntfy/ntfy.container ~/.config/containers/systemd/
 systemctl --user daemon-reload
 systemctl --user start ntfy
 
-podman exec ntfy ntfy user add --role=user yourname
-podman exec ntfy ntfy token add --label=claude-hooks yourname
-```
-
-</details>
-
-<details>
-<summary><strong>Docker Compose</strong></summary>
-
-```bash
-mkdir -p data
-cp ntfy/server.yml.template data/server.yml
-# Edit server.yml: set base-url and listen-http
-
-docker compose -f ntfy/docker-compose.yml up -d
-
-docker compose -f ntfy/docker-compose.yml exec ntfy ntfy user add --role=user yourname
-docker compose -f ntfy/docker-compose.yml exec ntfy ntfy token add --label=claude-hooks yourname
-```
-
-</details>
-
-<details>
-<summary><strong>Bare binary</strong></summary>
-
-```bash
-curl -L "https://github.com/binwiederhier/ntfy/releases/latest/download/ntfy_$(uname -s)_$(uname -m | sed 's/x86_64/amd64/').tar.gz" | tar xz
-sudo mv ntfy_*/ntfy /usr/local/bin/
-
-mkdir -p ~/.local/share/cc-notify
-cp ntfy/server.yml.template ~/.local/share/cc-notify/server.yml
-# Edit server.yml: set base-url and listen-http
-
-ntfy serve --config ~/.local/share/cc-notify/server.yml
+# Create subscriber user
+podman exec -i ntfy ntfy user add --role=user claude-user
+# Create hooks user
+podman exec -i ntfy ntfy user add --role=user claude-hooks
+# Set access
+podman exec ntfy ntfy access claude-user claude read-write
+podman exec ntfy ntfy access claude-hooks claude write-only
 ```
 
 </details>
@@ -216,42 +199,6 @@ ntfy serve --config ~/.local/share/cc-notify/server.yml
 
 ```bash
 sudo tailscale serve --bg --https 443 http://127.0.0.1:8098
-```
-
-</details>
-
-## Reverse Proxy Alternatives
-
-If you don't use Tailscale, expose ntfy via a reverse proxy with TLS.
-
-<details>
-<summary><strong>Caddy</strong></summary>
-
-```
-notify.example.com {
-    reverse_proxy 127.0.0.1:8098
-}
-```
-
-</details>
-
-<details>
-<summary><strong>nginx</strong></summary>
-
-```nginx
-server {
-    listen 443 ssl;
-    server_name notify.example.com;
-
-    location / {
-        proxy_pass http://127.0.0.1:8098;
-        proxy_set_header Host $host;
-        proxy_set_header X-Forwarded-For $remote_addr;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection "upgrade";
-    }
-}
 ```
 
 </details>
@@ -267,19 +214,15 @@ curl -H "Authorization: Bearer YOUR_TOKEN" -d "test" http://127.0.0.1:8098/claud
 **Check ntfy is running:**
 
 ```bash
-# Podman / bare binary
 systemctl --user status ntfy
-
-# Docker
-docker compose ps
-
-# Any method
 curl http://127.0.0.1:8098/v1/health
 ```
 
 **Hook not firing:** hooks log to stderr in your terminal. Test the `curl` command from the hooks config manually.
 
 **Podman permission denied:** `systemctl --user enable --now podman.socket`
+
+**iOS notifications not instant:** verify `upstream-base-url: "https://ntfy.sh"` is set in `~/.local/share/cc-notify/server.yml`.
 
 ## License
 
