@@ -363,6 +363,10 @@ print_hooks_config() {
     auth_header="$(get_auth_header)"
 
     # Generate hooks JSON once, write to file, display to user
+    #
+    # Hook data arrives via stdin JSON, not environment variables.
+    # Stop: hardcoded message (stdin has no useful user-facing text)
+    # Notification: extract .message from stdin JSON via jq
     local hooks_file="$DATA_DIR/hooks.json"
     cat > "$hooks_file" <<HOOKS
 {
@@ -384,7 +388,7 @@ print_hooks_config() {
         "hooks": [
           {
             "type": "command",
-            "command": "curl -s -H '${auth_header}' -H 'Title: Claude Code' -H 'Tags: bell' -d \"\$CLAUDE_NOTIFICATION\" ${BASE_URL}/claude"
+            "command": "jq -r '.message // empty' | grep . | curl -s -H '${auth_header}' -H 'Title: Claude Code' -H 'Tags: bell' -d @- ${BASE_URL}/claude"
           }
         ]
       }
@@ -494,6 +498,11 @@ main() {
     fi
     if ! has_cmd openssl; then
         err "openssl is required but not found"
+        exit 1
+    fi
+    if ! has_cmd jq; then
+        err "jq is required but not found (used to parse hook stdin JSON)"
+        err "Install: sudo dnf install jq / brew install jq / sudo apt install jq"
         exit 1
     fi
 

@@ -1,8 +1,10 @@
 # cc-notify
 
-Get push notifications on your phone when [Claude Code](https://docs.anthropic.com/en/docs/claude-code) needs your input.
+Get push notifications on your phone when your AI coding agent needs your input.
 
-Self-hosted [ntfy](https://ntfy.sh) server with [Claude Code hooks](https://docs.anthropic.com/en/docs/claude-code/hooks). Notifications travel over a direct [WireGuard](https://www.wireguard.com/) tunnel via [Tailscale Serve](https://tailscale.com/kb/1312/serve) — no third-party server ever sees your messages.
+Runs a self-hosted [ntfy](https://ntfy.sh) server and wires it into your agent's hook system. Built for [Claude Code](https://docs.anthropic.com/en/docs/claude-code), works with [Cursor](#other-tools), [Gemini CLI](#other-tools), and [others](#other-tools).
+
+With [Tailscale Serve](https://tailscale.com/kb/1312/serve), notifications travel over a direct WireGuard tunnel — no third-party server ever sees your messages.
 
 ## Quick Start
 
@@ -16,18 +18,18 @@ The setup script will:
 
 1. Detect your OS and container runtime (Podman, Docker, or neither)
 2. Deploy ntfy with authentication enabled
-3. Configure [Tailscale Serve](https://tailscale.com/kb/1312/serve) for HTTPS access from your phone
+3. Configure Tailscale Serve for HTTPS access from your phone
 4. Generate the hooks JSON for `~/.claude/settings.json`
 
 ### Requirements
 
 - **Podman** *(tested)*, Docker, or neither (downloads the ntfy binary)
 - **[Tailscale](https://tailscale.com/)** for phone notifications *(tested, recommended)*
-- `curl` and `openssl`
+- `curl`, `jq`, `openssl`
 
 ## Subscribing to Notifications
 
-After running `setup.sh`, subscribe on your phone or browser to start receiving notifications.
+After running `setup.sh`, subscribe on your phone or browser.
 
 ### Phone
 
@@ -46,17 +48,94 @@ Your phone must be on your Tailscale network.
 ## How It Works
 
 ```
-Claude Code ──hook──▶ curl ──▶ ntfy (127.0.0.1:8098) ──▶ tailscale serve ──▶ phone
+agent ──hook──▶ jq + curl ──▶ ntfy (127.0.0.1:8098) ──▶ tailscale serve ──▶ phone
 ```
 
-ntfy runs on localhost. Claude Code [hooks](https://docs.anthropic.com/en/docs/claude-code/hooks) fire `curl` commands that POST to ntfy on two events:
+ntfy runs on localhost. Agent hooks fire shell commands that POST to ntfy. Two events are wired up:
 
 | Hook | Fires when | Notification |
 |------|-----------|--------------|
-| **Stop** | Claude finishes and waits for input | "Claude is waiting for input" |
-| **Notification** | Claude sends a notification | The message content |
+| **Stop** | Agent finishes and waits for input | "Claude is waiting for input" |
+| **Notification** | Agent sends a notification | The message content (parsed from stdin JSON via `jq`) |
 
 Tailscale Serve exposes ntfy over HTTPS to your tailnet — auto-provisioned TLS, no port forwarding, accessible from any device on your network.
+
+> **Note:** Claude Code hooks work regardless of which model provider you use (Anthropic, OpenAI, Google, Bedrock, etc.). The hooks are a client-side feature.
+
+## Other Tools
+
+The ntfy server and Tailscale setup are tool-agnostic. Only the hooks configuration differs per tool. After running `setup.sh`, adapt the generated `curl` commands to your tool's config format.
+
+### Cursor
+
+Cursor hooks use nearly identical JSON. Place in `.cursor/hooks.json` at your project root:
+
+```json
+{
+  "version": 1,
+  "hooks": {
+    "stop": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "curl -s -H 'Authorization: Bearer YOUR_TOKEN' -H 'Title: Cursor' -H 'Tags: robot' -d 'Cursor is waiting for input' https://your-host.ts.net/claude"
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+### Gemini CLI
+
+Gemini CLI hooks go in `.gemini/settings.json`:
+
+```json
+{
+  "hooks": {
+    "Notification": [
+      {
+        "command": "jq -r '.message // empty' | grep . | curl -s -H 'Authorization: Bearer YOUR_TOKEN' -H 'Title: Gemini CLI' -H 'Tags: bell' -d @- https://your-host.ts.net/claude"
+      }
+    ]
+  }
+}
+```
+
+### Aider
+
+Aider supports a simple notification command flag:
+
+```bash
+aider --notifications-command "curl -s -H 'Authorization: Bearer YOUR_TOKEN' -d 'Aider is waiting for input' https://your-host.ts.net/claude"
+```
+
+### Codex CLI
+
+Codex uses `config.toml`. Add under `[notify]`:
+
+```toml
+[notify]
+command = "curl -s -H 'Authorization: Bearer YOUR_TOKEN' -d 'Codex is waiting for input' https://your-host.ts.net/claude"
+```
+
+### Any tool with shell hooks
+
+The core notification is a single `curl` command. If your tool can run a shell command on completion, use:
+
+```bash
+curl -s \
+  -H 'Authorization: Bearer YOUR_TOKEN' \
+  -H 'Title: My Agent' \
+  -H 'Tags: robot' \
+  -d 'Agent is waiting for input' \
+  https://your-host.ts.net/claude
+```
+
+Replace `YOUR_TOKEN` and the URL with values from `~/.local/share/cc-notify/hooks.json`.
 
 ## Security
 
@@ -120,7 +199,6 @@ docker compose -f ntfy/docker-compose.yml exec ntfy ntfy token add --label=claud
 <summary><strong>Bare binary</strong></summary>
 
 ```bash
-# Download
 curl -L "https://github.com/binwiederhier/ntfy/releases/latest/download/ntfy_$(uname -s)_$(uname -m | sed 's/x86_64/amd64/').tar.gz" | tar xz
 sudo mv ntfy_*/ntfy /usr/local/bin/
 
@@ -199,7 +277,7 @@ docker compose ps
 curl http://127.0.0.1:8098/v1/health
 ```
 
-**Hook not firing:** hooks log to stderr in your terminal. Test the `curl` command from the hooks JSON manually.
+**Hook not firing:** hooks log to stderr in your terminal. Test the `curl` command from the hooks config manually.
 
 **Podman permission denied:** `systemctl --user enable --now podman.socket`
 
