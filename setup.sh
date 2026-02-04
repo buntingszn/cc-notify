@@ -167,15 +167,33 @@ else
 fi
 [[ -z "$body" ]] && exit 0
 
+# Optional per-invocation overrides via environment
+SOUND="${BARK_SOUND:-}"
+ICON="${BARK_ICON:-}"
+
+# Build jq args for optional fields
+extra_args=()
+extra_filter='.'
+if [[ -n "$SOUND" ]]; then
+    extra_args+=(--arg sound "$SOUND")
+    extra_filter="$extra_filter | .sound=\$sound"
+fi
+if [[ -n "$ICON" ]]; then
+    extra_args+=(--arg icon "$ICON")
+    extra_filter="$extra_filter | .icon=\$icon"
+fi
+
 if [[ -n "$ENC_KEY_HEX" ]]; then
-    payload=$(/usr/bin/jq -nc --arg t "Claude Code" --arg b "$body" '{"title":$t,"body":$b,"group":"claude"}')
+    payload=$(/usr/bin/jq -nc "${extra_args[@]}" --arg t "Claude Code" --arg b "$body" \
+      '{"title":$t,"body":$b,"group":"claude"} | '"$extra_filter")
     ciphertext=$(echo -n "$payload" | /usr/bin/openssl enc -aes-128-cbc -K "$ENC_KEY_HEX" -iv "$ENC_IV_HEX" | /usr/bin/base64 -w 0)
     /usr/bin/curl -s -H 'Content-Type: application/json' \
       -d "$(/usr/bin/jq -nc --arg dk "$DEVICE_KEY" --arg ct "$ciphertext" '{device_key:$dk,ciphertext:$ct}')" \
       "${BASE_URL}/push"
 else
     /usr/bin/curl -s -H 'Content-Type: application/json' \
-      -d "$(/usr/bin/jq -nc --arg dk "$DEVICE_KEY" --arg t "Claude Code" --arg b "$body" '{device_key:$dk,title:$t,body:$b,group:"claude"}')" \
+      -d "$(/usr/bin/jq -nc "${extra_args[@]}" --arg dk "$DEVICE_KEY" --arg t "Claude Code" --arg b "$body" \
+        '{"device_key":$dk,"title":$t,"body":$b,"group":"claude"} | '"$extra_filter")" \
       "${BASE_URL}/push"
 fi
 LOGIC
@@ -275,6 +293,7 @@ print_bark_hooks() {
     header "Claude Code Hooks Configuration"
 
     local push_script="$DATA_DIR/bark-push.sh"
+    local icon_url="https://registry.npmmirror.com/@lobehub/icons-static-png/latest/files/dark/claude.png"
     local hooks_file="$DATA_DIR/hooks.json"
     cat > "$hooks_file" <<HOOKS
 {
@@ -285,7 +304,7 @@ print_bark_hooks() {
         "hooks": [
           {
             "type": "command",
-            "command": "${push_script} 'Claude is waiting for input'"
+            "command": "/usr/bin/jq -r '\"Claude is waiting — \" + (.cwd // \"\" | split(\"/\") | last)' | /usr/bin/env BARK_SOUND=tink BARK_ICON=${icon_url} ${push_script}"
           }
         ]
       }
@@ -296,7 +315,18 @@ print_bark_hooks() {
         "hooks": [
           {
             "type": "command",
-            "command": "/usr/bin/jq -r '.message // empty' | grep . | ${push_script}"
+            "command": "/usr/bin/jq -r '((.cwd // \"\" | split(\"/\") | last) as $p | (.message // empty) | . + \" — \" + $p)' | grep . | /usr/bin/env BARK_SOUND=calypso BARK_ICON=${icon_url} ${push_script}"
+          }
+        ]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/usr/bin/jq -r '((.cwd // \"\" | split(\"/\") | last) as $p | \"Command failed: \" + ((.tool_input.command // \"unknown\") | .[0:60]) + \" — \" + $p)' | /usr/bin/env BARK_SOUND=bamboo BARK_ICON=${icon_url} ${push_script}"
           }
         ]
       }
