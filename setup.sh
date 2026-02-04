@@ -287,6 +287,33 @@ setup_bark() {
     fi
 
     generate_bark_push_script
+
+    # Notification sounds
+    header "Notification Sounds"
+    echo "Each hook can play a different iOS sound on your phone."
+    echo "Defaults to 'tink' for all hooks if you skip customization."
+    echo
+
+    BARK_STOP_SOUND="tink"
+    BARK_NOTIFY_SOUND="tink"
+    BARK_FAILURE_SOUND="tink"
+
+    local customize_sounds
+    customize_sounds="$(prompt_choice "Customize notification sounds?" \
+        "No — use 'tink' for all hooks (recommended)" \
+        "Yes — pick a sound for each hook type")"
+
+    if [[ "$customize_sounds" == "2" ]]; then
+        echo
+        info "Common sounds: tink, calypso, bamboo, bloom, chime, glass, telegraph, ladder, minuet, popcorn, sherwood"
+        echo
+
+        BARK_STOP_SOUND="$(prompt_value "Sound for Stop hook (agent waiting for input)" "tink")"
+        BARK_NOTIFY_SOUND="$(prompt_value "Sound for Notification hook (agent messages)" "calypso")"
+        BARK_FAILURE_SOUND="$(prompt_value "Sound for Failure hook (command errors)" "bamboo")"
+    fi
+
+    ok "Sounds: Stop=${BARK_STOP_SOUND}, Notification=${BARK_NOTIFY_SOUND}, Failure=${BARK_FAILURE_SOUND}"
 }
 
 print_bark_hooks() {
@@ -304,7 +331,7 @@ print_bark_hooks() {
         "hooks": [
           {
             "type": "command",
-            "command": "/usr/bin/jq -r '\"Claude is waiting — \" + (.cwd // \"\" | split(\"/\") | last)' | /usr/bin/env BARK_SOUND=tink BARK_ICON=${icon_url} ${push_script}"
+            "command": "/usr/bin/jq -r '\"Claude is waiting — \" + (.cwd // \"\" | split(\"/\") | last)' | /usr/bin/env BARK_SOUND=${BARK_STOP_SOUND} BARK_ICON=${icon_url} ${push_script}"
           }
         ]
       }
@@ -315,7 +342,7 @@ print_bark_hooks() {
         "hooks": [
           {
             "type": "command",
-            "command": "/usr/bin/jq -r '((.cwd // \"\" | split(\"/\") | last) as $p | (.message // empty) | . + \" — \" + $p)' | grep . | /usr/bin/env BARK_SOUND=calypso BARK_ICON=${icon_url} ${push_script}"
+            "command": "/usr/bin/jq -r '((.cwd // \"\" | split(\"/\") | last) as $p | (.message // empty) | . + \" — \" + $p)' | grep . | /usr/bin/env BARK_SOUND=${BARK_NOTIFY_SOUND} BARK_ICON=${icon_url} ${push_script}"
           }
         ]
       }
@@ -326,7 +353,7 @@ print_bark_hooks() {
         "hooks": [
           {
             "type": "command",
-            "command": "/usr/bin/jq -r '((.cwd // \"\" | split(\"/\") | last) as $p | \"Command failed: \" + ((.tool_input.command // \"unknown\") | .[0:60]) + \" — \" + $p)' | /usr/bin/env BARK_SOUND=bamboo BARK_ICON=${icon_url} ${push_script}"
+            "command": "/usr/bin/jq -r '((.cwd // \"\" | split(\"/\") | last) as $p | \"Command failed: \" + ((.tool_input.command // \"unknown\") | .[0:60]) + \" — \" + $p)' | /usr/bin/env BARK_SOUND=${BARK_FAILURE_SOUND} BARK_ICON=${icon_url} ${push_script}"
           }
         ]
       }
