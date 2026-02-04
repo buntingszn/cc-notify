@@ -32,12 +32,19 @@ agent ──hook──> bark-push.sh ──AES-128-CBC──> bark (localhost) �
 agent ──hook──> jq + curl ──────────────────> ntfy (localhost) ────────> phone/browser
 ```
 
-Agent hooks fire shell commands that POST notifications to the local server. Two events are wired:
+Agent hooks fire shell commands that POST notifications to the local server. Three events are wired, each with a distinct sound and project-aware message:
 
-| Hook | Fires when | Notification |
-|------|-----------|--------------|
-| **Stop** | Agent finishes and waits for input | "Claude is waiting for input" |
-| **Notification** | Agent sends a notification | The message content |
+| Hook | Fires when | Message | Sound |
+|------|-----------|---------|-------|
+| **Stop** | Agent finishes and waits for input | "Claude is waiting — *project*" | tink |
+| **Notification** | Agent sends a notification | "*message* — *project*" | calypso |
+| **PostToolUseFailure** | A Bash command fails | "Command failed: *cmd* — *project*" | bamboo |
+
+The push script supports `BARK_SOUND` and `BARK_ICON` environment variables, so each hook can specify different notification sounds and a custom icon. Pass them as env var prefixes:
+
+```bash
+BARK_SOUND=tink BARK_ICON=https://example.com/icon.png ~/.local/share/cc-notify/bark-push.sh 'Hello'
+```
 
 > Hooks are a client-side feature — they work regardless of which model provider you use.
 
