@@ -156,7 +156,7 @@ ENC_KEY_HEX='${ENCRYPT_KEY_HEX}'
 ENC_IV_HEX='${ENCRYPT_IV_HEX}'
 CONF
 
-    # Script logic (no variable expansion)
+    # Script logic (no variable expansion — absolute paths for container compatibility)
     cat >> "$push_script" <<'LOGIC'
 
 body=""
@@ -168,14 +168,14 @@ fi
 [[ -z "$body" ]] && exit 0
 
 if [[ -n "$ENC_KEY_HEX" ]]; then
-    payload=$(jq -nc --arg t "Claude Code" --arg b "$body" '{"title":$t,"body":$b,"group":"claude"}')
-    ciphertext=$(echo -n "$payload" | openssl enc -aes-128-cbc -K "$ENC_KEY_HEX" -iv "$ENC_IV_HEX" | base64 -w 0)
-    curl -s -H 'Content-Type: application/json' \
-      -d "$(jq -nc --arg dk "$DEVICE_KEY" --arg ct "$ciphertext" '{device_key:$dk,ciphertext:$ct}')" \
+    payload=$(/usr/bin/jq -nc --arg t "Claude Code" --arg b "$body" '{"title":$t,"body":$b,"group":"claude"}')
+    ciphertext=$(echo -n "$payload" | /usr/bin/openssl enc -aes-128-cbc -K "$ENC_KEY_HEX" -iv "$ENC_IV_HEX" | /usr/bin/base64 -w 0)
+    /usr/bin/curl -s -H 'Content-Type: application/json' \
+      -d "$(/usr/bin/jq -nc --arg dk "$DEVICE_KEY" --arg ct "$ciphertext" '{device_key:$dk,ciphertext:$ct}')" \
       "${BASE_URL}/push"
 else
-    curl -s -H 'Content-Type: application/json' \
-      -d "$(jq -nc --arg dk "$DEVICE_KEY" --arg t "Claude Code" --arg b "$body" '{device_key:$dk,title:$t,body:$b,group:"claude"}')" \
+    /usr/bin/curl -s -H 'Content-Type: application/json' \
+      -d "$(/usr/bin/jq -nc --arg dk "$DEVICE_KEY" --arg t "Claude Code" --arg b "$body" '{device_key:$dk,title:$t,body:$b,group:"claude"}')" \
       "${BASE_URL}/push"
 fi
 LOGIC
@@ -296,7 +296,7 @@ print_bark_hooks() {
         "hooks": [
           {
             "type": "command",
-            "command": "jq -r '.message // empty' | grep . | ${push_script}"
+            "command": "/usr/bin/jq -r '.message // empty' | grep . | ${push_script}"
           }
         ]
       }
@@ -400,7 +400,7 @@ print_ntfy_hooks() {
         "hooks": [
           {
             "type": "command",
-            "command": "curl -s -H 'Authorization: Bearer ${HOOKS_TOKEN}' -H 'Title: Claude Code' -H 'Tags: robot' -d 'Claude is waiting for input' ${BASE_URL}/claude"
+            "command": "/usr/bin/curl -s -H 'Authorization: Bearer ${HOOKS_TOKEN}' -H 'Title: Claude Code' -H 'Tags: robot' -d 'Claude is waiting for input' ${BASE_URL}/claude"
           }
         ]
       }
@@ -411,7 +411,7 @@ print_ntfy_hooks() {
         "hooks": [
           {
             "type": "command",
-            "command": "jq -r '.message // empty' | grep . | curl -s -H 'Authorization: Bearer ${HOOKS_TOKEN}' -H 'Title: Claude Code' -H 'Tags: bell' -d @- ${BASE_URL}/claude"
+            "command": "/usr/bin/jq -r '.message // empty' | grep . | /usr/bin/curl -s -H 'Authorization: Bearer ${HOOKS_TOKEN}' -H 'Title: Claude Code' -H 'Tags: bell' -d @- ${BASE_URL}/claude"
           }
         ]
       }
