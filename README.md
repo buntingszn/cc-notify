@@ -25,7 +25,7 @@ Both paths deploy as a Podman Quadlet (auto-starts on login) and optionally conf
 
 - **Linux** with **Podman** and **systemd**
 - **[Tailscale](https://tailscale.com/)** for phone notifications *(recommended)*
-- `curl`, `jq` (ntfy also needs `openssl`)
+- `curl`, `jq` (encryption and ntfy also need `openssl`)
 
 ## Bark vs ntfy
 
@@ -73,10 +73,10 @@ Your phone must be on your Tailscale network.
 
 ## How It Works
 
-**Bark:**
+**Bark (with encryption):**
 
 ```
-agent ──hook──> jq + curl ──> bark (127.0.0.1:8099) ──APNs──> iPhone
+agent ──hook──> bark-push.sh ──AES-128-CBC──> bark (127.0.0.1:8099) ──APNs──> iPhone (decrypts on-device)
 ```
 
 **ntfy:**
@@ -100,7 +100,17 @@ Tailscale Serve exposes the backend over HTTPS to your tailnet — auto-provisio
 
 ## Other Tools
 
-The notification server and Tailscale setup are tool-agnostic. Only the hooks configuration differs per tool. After running `setup.sh`, adapt the generated `curl` commands to your tool's config format.
+The notification server and Tailscale setup are tool-agnostic. Only the hooks configuration differs per tool. After running `setup.sh`, use the generated push script (`~/.local/share/cc-notify/bark-push.sh` for Bark) or adapt the `curl` commands to your tool's config format.
+
+The push script accepts a message as an argument or reads from stdin, and handles encryption automatically:
+
+```bash
+# Fixed message
+~/.local/share/cc-notify/bark-push.sh 'Agent is waiting for input'
+
+# Piped message
+echo 'Task complete' | ~/.local/share/cc-notify/bark-push.sh
+```
 
 ### Cursor
 
@@ -118,7 +128,7 @@ Place in `.cursor/hooks.json` at your project root.
         "hooks": [
           {
             "type": "command",
-            "command": "curl -s -H 'Content-Type: application/json' -d '{\"device_key\":\"YOUR_KEY\",\"title\":\"Cursor\",\"body\":\"Cursor is waiting for input\",\"group\":\"claude\"}' https://your-host.ts.net/push"
+            "command": "~/.local/share/cc-notify/bark-push.sh 'Cursor is waiting for input'"
           }
         ]
       }
@@ -159,7 +169,7 @@ Gemini CLI hooks go in `.gemini/settings.json`.
   "hooks": {
     "Notification": [
       {
-        "command": "jq -r '.message // empty' | grep . | jq -Rsc '{\"device_key\":\"YOUR_KEY\",\"title\":\"Gemini CLI\",\"body\":.,\"group\":\"claude\"}' | curl -s -H 'Content-Type: application/json' -d @- https://your-host.ts.net/push"
+        "command": "jq -r '.message // empty' | grep . | ~/.local/share/cc-notify/bark-push.sh"
       }
     ]
   }
@@ -184,7 +194,7 @@ Gemini CLI hooks go in `.gemini/settings.json`.
 
 ```bash
 # Bark
-aider --notifications-command "curl -s -H 'Content-Type: application/json' -d '{\"device_key\":\"YOUR_KEY\",\"title\":\"Aider\",\"body\":\"Aider is waiting for input\",\"group\":\"claude\"}' https://your-host.ts.net/push"
+aider --notifications-command "~/.local/share/cc-notify/bark-push.sh 'Aider is waiting for input'"
 
 # ntfy
 aider --notifications-command "curl -s -H 'Authorization: Bearer YOUR_TOKEN' -d 'Aider is waiting for input' https://your-host.ts.net/claude"
@@ -197,7 +207,7 @@ Add under `[notify]` in `config.toml`:
 ```toml
 # Bark
 [notify]
-command = "curl -s -H 'Content-Type: application/json' -d '{\"device_key\":\"YOUR_KEY\",\"title\":\"Codex\",\"body\":\"Codex is waiting for input\",\"group\":\"claude\"}' https://your-host.ts.net/push"
+command = "~/.local/share/cc-notify/bark-push.sh 'Codex is waiting for input'"
 
 # ntfy
 [notify]
@@ -206,14 +216,12 @@ command = "curl -s -H 'Authorization: Bearer YOUR_TOKEN' -d 'Codex is waiting fo
 
 ### Any tool with shell hooks
 
-The core notification is a single `curl` command. Replace placeholders with values from `~/.local/share/cc-notify/hooks.json`.
+For Bark, use the generated push script. For ntfy, use `curl` with your bearer token.
 
 **Bark:**
 
 ```bash
-curl -s -H 'Content-Type: application/json' \
-  -d '{"device_key":"YOUR_KEY","title":"My Agent","body":"Agent is waiting","group":"claude"}' \
-  https://your-host.ts.net/push
+~/.local/share/cc-notify/bark-push.sh 'Agent is waiting for input'
 ```
 
 **ntfy:**
@@ -235,7 +243,7 @@ curl -s \
 - The **device key** is the only credential. Anyone with it can push to your device.
 - Bark pushes directly to **Apple Push Notification service** — no relay server involved.
 - With Tailscale Serve, traffic is encrypted over a WireGuard tunnel. Without it, traffic stays on loopback.
-- The Bark iOS app supports **end-to-end encryption** — enable it in the app's settings if you're sending sensitive content. When enabled, notifications are encrypted on the sender and decrypted on-device; the bark-server only sees ciphertext.
+- **End-to-end encryption** is offered during setup (recommended). When enabled, `setup.sh` generates an AES-128-CBC key and IV, creates an encrypted push script (`~/.local/share/cc-notify/bark-push.sh`), and prints the key/IV for you to enter in the Bark iOS app. The bark-server and APNs only ever see ciphertext — decryption happens on-device.
 
 ### ntfy
 
@@ -327,9 +335,7 @@ sudo tailscale serve --bg --https 443 http://127.0.0.1:8098   # ntfy
 **Test push directly:**
 
 ```bash
-curl -H 'Content-Type: application/json' \
-  -d '{"device_key":"YOUR_KEY","title":"Test","body":"Hello!"}' \
-  http://127.0.0.1:8099/push
+~/.local/share/cc-notify/bark-push.sh 'Hello from cc-notify!'
 ```
 
 **Check bark is running:**
@@ -340,6 +346,8 @@ curl http://127.0.0.1:8099/healthz
 ```
 
 **No notification on phone:** Verify your device key is correct (shown on the Bark app main screen). Check that your phone is on the same Tailscale network if using Tailscale Serve.
+
+**Encryption not working:** Verify the Bark app has the same algorithm (AES-128-CBC), key, and IV configured under "Push Encryption". The key and IV are saved in `~/.local/share/cc-notify/bark-push.sh`.
 
 ### ntfy
 

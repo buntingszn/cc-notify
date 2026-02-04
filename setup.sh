@@ -142,6 +142,48 @@ setup_tailscale_serve() {
 
 # --- Bark ---
 
+generate_bark_push_script() {
+    local push_script="$DATA_DIR/bark-push.sh"
+
+    # Config values (expanded from setup variables)
+    cat > "$push_script" <<CONF
+#!/usr/bin/env bash
+set -euo pipefail
+
+DEVICE_KEY='${DEVICE_KEY}'
+BASE_URL='${BASE_URL}'
+ENC_KEY_HEX='${ENCRYPT_KEY_HEX}'
+ENC_IV_HEX='${ENCRYPT_IV_HEX}'
+CONF
+
+    # Script logic (no variable expansion)
+    cat >> "$push_script" <<'LOGIC'
+
+body=""
+if [[ $# -gt 0 ]]; then
+    body="$1"
+else
+    body="$(cat)"
+fi
+[[ -z "$body" ]] && exit 0
+
+if [[ -n "$ENC_KEY_HEX" ]]; then
+    payload=$(jq -nc --arg t "Claude Code" --arg b "$body" '{"title":$t,"body":$b,"group":"claude"}')
+    ciphertext=$(echo -n "$payload" | openssl enc -aes-128-cbc -K "$ENC_KEY_HEX" -iv "$ENC_IV_HEX" | base64 -w 0)
+    curl -s -H 'Content-Type: application/json' \
+      -d "$(jq -nc --arg dk "$DEVICE_KEY" --arg ct "$ciphertext" '{device_key:$dk,ciphertext:$ct}')" \
+      "${BASE_URL}/push"
+else
+    curl -s -H 'Content-Type: application/json' \
+      -d "$(jq -nc --arg dk "$DEVICE_KEY" --arg t "Claude Code" --arg b "$body" '{device_key:$dk,title:$t,body:$b,group:"claude"}')" \
+      "${BASE_URL}/push"
+fi
+LOGIC
+
+    chmod +x "$push_script"
+    ok "Push script written to $push_script"
+}
+
 setup_bark() {
     header "Deploying Bark with Podman Quadlet"
 
@@ -177,11 +219,62 @@ setup_bark() {
         err "Device key is required. Add your server in the Bark app first."
         exit 1
     fi
+
+    # Encryption setup
+    header "Push Encryption (AES-128-CBC)"
+    echo "Encrypts notification content before it leaves your machine."
+    echo "The bark-server and Apple APNs never see your message text."
+    echo
+
+    local setup_enc
+    setup_enc="$(prompt_choice "Enable push encryption?" \
+        "Yes — generate a random key and IV (recommended)" \
+        "Yes — enter an existing key and IV" \
+        "No — send notifications in plaintext")"
+
+    ENCRYPT_KEY=""
+    ENCRYPT_IV=""
+    ENCRYPT_KEY_HEX=""
+    ENCRYPT_IV_HEX=""
+
+    if [[ "$setup_enc" == "1" ]] || [[ "$setup_enc" == "2" ]]; then
+        for cmd in openssl xxd; do
+            if ! has_cmd "$cmd"; then
+                err "Encryption requires '${cmd}'. Install it and re-run setup."
+                exit 1
+            fi
+        done
+    fi
+
+    if [[ "$setup_enc" == "1" ]]; then
+        ENCRYPT_KEY="$(openssl rand -base64 24 | tr -dc 'a-zA-Z0-9' | head -c 16)"
+        ENCRYPT_IV="$(openssl rand -base64 24 | tr -dc 'a-zA-Z0-9' | head -c 16)"
+        ENCRYPT_KEY_HEX="$(printf '%s' "$ENCRYPT_KEY" | xxd -ps -c 200)"
+        ENCRYPT_IV_HEX="$(printf '%s' "$ENCRYPT_IV" | xxd -ps -c 200)"
+        ok "Generated encryption key and IV"
+    elif [[ "$setup_enc" == "2" ]]; then
+        ENCRYPT_KEY="$(prompt_value "Encryption key (exactly 16 characters)" "")"
+        if [[ ${#ENCRYPT_KEY} -ne 16 ]]; then
+            err "Key must be exactly 16 characters"
+            exit 1
+        fi
+        ENCRYPT_IV="$(prompt_value "Encryption IV (exactly 16 characters)" "")"
+        if [[ ${#ENCRYPT_IV} -ne 16 ]]; then
+            err "IV must be exactly 16 characters"
+            exit 1
+        fi
+        ENCRYPT_KEY_HEX="$(printf '%s' "$ENCRYPT_KEY" | xxd -ps -c 200)"
+        ENCRYPT_IV_HEX="$(printf '%s' "$ENCRYPT_IV" | xxd -ps -c 200)"
+        ok "Encryption key and IV accepted"
+    fi
+
+    generate_bark_push_script
 }
 
 print_bark_hooks() {
     header "Claude Code Hooks Configuration"
 
+    local push_script="$DATA_DIR/bark-push.sh"
     local hooks_file="$DATA_DIR/hooks.json"
     cat > "$hooks_file" <<HOOKS
 {
@@ -192,7 +285,7 @@ print_bark_hooks() {
         "hooks": [
           {
             "type": "command",
-            "command": "curl -s -H 'Content-Type: application/json' -d '{\"device_key\":\"${DEVICE_KEY}\",\"title\":\"Claude Code\",\"body\":\"Claude is waiting for input\",\"group\":\"claude\"}' ${BASE_URL}/push"
+            "command": "${push_script} 'Claude is waiting for input'"
           }
         ]
       }
@@ -203,7 +296,7 @@ print_bark_hooks() {
         "hooks": [
           {
             "type": "command",
-            "command": "jq -r '.message // empty' | grep . | jq -Rsc '{\"device_key\":\"${DEVICE_KEY}\",\"title\":\"Claude Code\",\"body\":.,\"group\":\"claude\"}' | curl -s -H 'Content-Type: application/json' -d @- ${BASE_URL}/push"
+            "command": "jq -r '.message // empty' | grep . | ${push_script}"
           }
         ]
       }
@@ -226,13 +319,25 @@ print_bark_instructions() {
     echo -e "${BOLD}Phone (Bark app):${RESET}"
     echo "  1. Install Bark from the App Store"
     echo "  2. Open Bark → tap \"Servers\" → add your server: $BASE_URL"
-    echo "  3. Notifications arrive automatically — no topics to subscribe to"
+
+    if [[ -n "$ENCRYPT_KEY" ]]; then
+        echo "  3. Go to the app homepage → \"Push Encryption\""
+        echo "  4. Select algorithm: AES-128-CBC"
+        echo "  5. Set Key:  $ENCRYPT_KEY"
+        echo "  6. Set IV:   $ENCRYPT_IV"
+        echo "  7. Tap Done to save"
+        echo
+        warn "Save these values — you need them if you re-install the app:"
+        echo "  Key: $ENCRYPT_KEY"
+        echo "  IV:  $ENCRYPT_IV"
+    else
+        echo "  3. Notifications arrive automatically — no topics to subscribe to"
+    fi
     echo
 
+    local push_script="$DATA_DIR/bark-push.sh"
     echo -e "${BOLD}Test it:${RESET}"
-    echo "  curl -H 'Content-Type: application/json' \\"
-    echo "    -d '{\"device_key\":\"${DEVICE_KEY}\",\"title\":\"Test\",\"body\":\"Hello from cc-notify!\"}' \\"
-    echo "    $BASE_URL/push"
+    echo "  ${push_script} 'Hello from cc-notify!'"
 }
 
 # --- ntfy ---
