@@ -78,7 +78,7 @@ wait_for_healthy() {
     local retries=0
     while ! curl -sf "http://127.0.0.1:${PORT}${health_endpoint}" &>/dev/null; do
         sleep 1
-        retries=$((retries + 1))
+        (( retries++ ))
         if (( retries > 30 )); then
             err "${service_name} failed to start within 30 seconds"
             err "Check: systemctl --user status ${service_name}"
@@ -91,18 +91,11 @@ wait_for_healthy() {
 # --- Tailscale ---
 
 detect_tailscale_hostname() {
-    if ! has_cmd tailscale; then
-        return
+    if has_cmd tailscale; then
+        tailscale status --self --json 2>/dev/null \
+            | jq -r '.Self.DNSName // ""' \
+            | sed 's/\.$//' || true
     fi
-
-    local ts_hostname=""
-    if has_cmd jq; then
-        ts_hostname="$(tailscale status --self --json 2>/dev/null | jq -r '.Self.DNSName // ""' | sed 's/\.$//')" || true
-    elif has_cmd python3; then
-        ts_hostname="$(tailscale status --self --json 2>/dev/null | python3 -c 'import sys,json; d=json.load(sys.stdin); print(d.get("Self",{}).get("DNSName","").rstrip("."))' 2>/dev/null)" || true
-    fi
-
-    echo "$ts_hostname"
 }
 
 setup_tailscale_serve() {
@@ -252,8 +245,6 @@ setup_bark() {
 
     ENCRYPT_KEY=""
     ENCRYPT_IV=""
-    ENCRYPT_KEY_HEX=""
-    ENCRYPT_IV_HEX=""
 
     if [[ "$setup_enc" == "1" ]] || [[ "$setup_enc" == "2" ]]; then
         for cmd in openssl xxd; do
@@ -267,8 +258,6 @@ setup_bark() {
     if [[ "$setup_enc" == "1" ]]; then
         ENCRYPT_KEY="$(openssl rand -base64 24 | tr -dc 'a-zA-Z0-9' | head -c 16)"
         ENCRYPT_IV="$(openssl rand -base64 24 | tr -dc 'a-zA-Z0-9' | head -c 16)"
-        ENCRYPT_KEY_HEX="$(printf '%s' "$ENCRYPT_KEY" | xxd -ps -c 200)"
-        ENCRYPT_IV_HEX="$(printf '%s' "$ENCRYPT_IV" | xxd -ps -c 200)"
         ok "Generated encryption key and IV"
     elif [[ "$setup_enc" == "2" ]]; then
         ENCRYPT_KEY="$(prompt_value "Encryption key (exactly 16 characters)" "")"
@@ -281,9 +270,14 @@ setup_bark() {
             err "IV must be exactly 16 characters"
             exit 1
         fi
+        ok "Encryption key and IV accepted"
+    fi
+
+    ENCRYPT_KEY_HEX=""
+    ENCRYPT_IV_HEX=""
+    if [[ -n "$ENCRYPT_KEY" ]]; then
         ENCRYPT_KEY_HEX="$(printf '%s' "$ENCRYPT_KEY" | xxd -ps -c 200)"
         ENCRYPT_IV_HEX="$(printf '%s' "$ENCRYPT_IV" | xxd -ps -c 200)"
-        ok "Encryption key and IV accepted"
     fi
 
     generate_bark_push_script
@@ -435,9 +429,7 @@ setup_ntfy() {
     echo "$SUB_PASSWORD" | podman exec -i ntfy ntfy user add --role=user "$SUB_USERNAME" 2>/dev/null || true
     ok "Created subscriber user: $SUB_USERNAME"
 
-    local hooks_password
-    hooks_password="$(openssl rand -hex 16)"
-    echo "$hooks_password" | podman exec -i ntfy ntfy user add --role=user "claude-hooks" 2>/dev/null || true
+    openssl rand -hex 16 | podman exec -i ntfy ntfy user add --role=user "claude-hooks" 2>/dev/null || true
 
     podman exec ntfy ntfy access "$SUB_USERNAME" 'claude' read-write 2>/dev/null || true
     podman exec ntfy ntfy access "claude-hooks" 'claude' write-only 2>/dev/null || true
@@ -550,15 +542,12 @@ main() {
 
     # Base URL — auto-detect Tailscale and default to HTTPS
     local default_base_url="http://127.0.0.1:${PORT}"
-    TAILSCALE_HOSTNAME=""
+    TAILSCALE_HOSTNAME="$(detect_tailscale_hostname)"
 
-    local ts_hostname
-    ts_hostname="$(detect_tailscale_hostname)"
-    if [[ -n "$ts_hostname" ]]; then
-        TAILSCALE_HOSTNAME="$ts_hostname"
-        default_base_url="https://${ts_hostname}"
-        ok "Tailscale detected: $ts_hostname"
-        info "Defaulting base URL to https://${ts_hostname}"
+    if [[ -n "$TAILSCALE_HOSTNAME" ]]; then
+        default_base_url="https://${TAILSCALE_HOSTNAME}"
+        ok "Tailscale detected: $TAILSCALE_HOSTNAME"
+        info "Defaulting base URL to https://${TAILSCALE_HOSTNAME}"
     fi
 
     BASE_URL="$(prompt_value "Base URL (used in hooks and app config)" "$default_base_url")"
@@ -577,16 +566,14 @@ main() {
     if [[ "$BACKEND" == "bark" ]]; then
         print_bark_hooks
         print_bark_instructions
+        header "Done!"
+        echo "bark is running at $BASE_URL"
+        echo "Notifications will be pushed directly to your Bark app."
     else
         print_ntfy_hooks
         print_ntfy_instructions
-    fi
-
-    header "Done!"
-    echo "${BACKEND} is running at $BASE_URL"
-    if [[ "$BACKEND" == "bark" ]]; then
-        echo "Notifications will be pushed directly to your Bark app."
-    else
+        header "Done!"
+        echo "ntfy is running at $BASE_URL"
         echo "Subscribe to the 'claude' topic in your ntfy app to receive notifications."
     fi
 }
