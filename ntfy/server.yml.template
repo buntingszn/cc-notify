@@ -1,4 +1,4 @@
-# ntfy server configuration for cc-notify
+# ntfy server configuration for holler
 # See https://docs.ntfy.sh/config/ for all options
 
 base-url: "{{BASE_URL}}"

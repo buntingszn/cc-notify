@@ -2,11 +2,11 @@
 # Install to: ~/.config/containers/systemd/ntfy.container
 # Then: systemctl --user daemon-reload && systemctl --user start ntfy
 #
-# Data stored in: ~/.local/share/cc-notify/
-# Config at:      ~/.local/share/cc-notify/server.yml
+# Data stored in: ~/.local/share/holler/
+# Config at:      ~/.local/share/holler/server.yml
 
 [Unit]
-Description=ntfy push notification server (cc-notify)
+Description=ntfy push notification server (holler)
 After=network-online.target
 
 [Container]
@@ -17,8 +17,8 @@ ContainerName=ntfy
 Exec=serve --config /etc/ntfy/server.yml
 
 # Mount config and data from user's home (%h = $HOME)
-Volume=%h/.local/share/cc-notify/server.yml:/etc/ntfy/server.yml:ro,Z
-Volume=%h/.local/share/cc-notify:/var/lib/ntfy:Z
+Volume=%h/.local/share/holler/server.yml:/etc/ntfy/server.yml:ro,Z
+Volume=%h/.local/share/holler:/var/lib/ntfy:Z
 
 # Network — localhost only, Tailscale Serve handles external access
 PublishPort=127.0.0.1:8098:8098

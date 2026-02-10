@@ -1,4 +1,4 @@
-# cc-notify
+# holler
 
 Get push notifications on your phone when your AI coding agent needs your input.
 
@@ -7,8 +7,8 @@ Runs a self-hosted [Bark](https://github.com/Finb/Bark) or [ntfy](https://ntfy.s
 ## Quick Start
 
 ```bash
-git clone https://github.com/buntingszn/cc-notify.git
-cd cc-notify
+git clone https://github.com/buntingszn/holler.git
+cd holler
 ./setup.sh
 ```
 
@@ -22,7 +22,7 @@ The setup script:
 ### Requirements
 
 - **Linux** with **Podman** and **systemd**
-- **[Tailscale](https://tailscale.com/)** for phone notifications *(recommended)*
+- **[Tailscale](https://tailscale.com/)** for phone notifications _(recommended)_
 - `curl`, `jq` (encryption and ntfy also need `openssl`)
 
 ## How It Works
@@ -34,30 +34,30 @@ agent ──hook──> jq + curl ───────────────�
 
 Agent hooks fire shell commands that POST notifications to the local server. Three events are wired, each with a distinct sound and project-aware message:
 
-| Hook | Fires when | Message | Sound |
-|------|-----------|---------|-------|
-| **Stop** | Agent finishes and waits for input | "Claude is waiting — *project*" | tink |
-| **Notification** | Agent sends a notification | "*message* — *project*" | calypso |
-| **PostToolUseFailure** | A Bash command fails | "Command failed: *cmd* — *project*" | bamboo |
+| Hook                   | Fires when                         | Message                             | Sound   |
+| ---------------------- | ---------------------------------- | ----------------------------------- | ------- |
+| **Stop**               | Agent finishes and waits for input | "Claude is waiting — _project_"     | tink    |
+| **Notification**       | Agent sends a notification         | "_message_ — _project_"             | calypso |
+| **PostToolUseFailure** | A Bash command fails               | "Command failed: _cmd_ — _project_" | bamboo  |
 
 The push script supports `BARK_SOUND` and `BARK_ICON` environment variables, so each hook can specify different notification sounds and a custom icon. Pass them as env var prefixes:
 
 ```bash
-BARK_SOUND=tink BARK_ICON=https://example.com/icon.png ~/.local/share/cc-notify/bark-push.sh 'Hello'
+BARK_SOUND=tink BARK_ICON=https://example.com/icon.png ~/.local/share/holler/bark-push.sh 'Hello'
 ```
 
 > Hooks are a client-side feature — they work regardless of which model provider you use.
 
 ## Bark vs ntfy
 
-| | Bark | ntfy |
-|---|---|---|
-| **Platforms** | iOS | Android, iOS, browser |
-| **iOS push** | Direct to APNs | Via ntfy.sh relay (message ID only) |
-| **Auth** | Device key | Users + topics + ACLs |
-| **Encryption** | AES-128-CBC e2e (optional) | WireGuard transport only |
-| **Setup** | Install app, paste key | Install app, configure server, add user, subscribe |
-| **Web UI** | No | Yes |
+|                | Bark                       | ntfy                                               |
+| -------------- | -------------------------- | -------------------------------------------------- |
+| **Platforms**  | iOS                        | Android, iOS, browser                              |
+| **iOS push**   | Direct to APNs             | Via ntfy.sh relay (message ID only)                |
+| **Auth**       | Device key                 | Users + topics + ACLs                              |
+| **Encryption** | AES-128-CBC e2e (optional) | WireGuard transport only                           |
+| **Setup**      | Install app, paste key     | Install app, configure server, add user, subscribe |
+| **Web UI**     | No                         | Yes                                                |
 
 ## Subscribing
 
@@ -82,8 +82,8 @@ After running `setup.sh`, use the generated push script for Bark or adapt the `c
 
 ```bash
 # Bark — fixed message or piped from stdin
-~/.local/share/cc-notify/bark-push.sh 'Agent is waiting'
-echo 'Task complete' | ~/.local/share/cc-notify/bark-push.sh
+~/.local/share/holler/bark-push.sh 'Agent is waiting'
+echo 'Task complete' | ~/.local/share/holler/bark-push.sh
 ```
 
 <details>
@@ -101,7 +101,7 @@ Place in `.cursor/hooks.json` at your project root.
         "hooks": [
           {
             "type": "command",
-            "command": "~/.local/share/cc-notify/bark-push.sh 'Cursor is waiting for input'"
+            "command": "~/.local/share/holler/bark-push.sh 'Cursor is waiting for input'"
           }
         ]
       }
@@ -122,7 +122,7 @@ Add to `.gemini/settings.json`:
   "hooks": {
     "Notification": [
       {
-        "command": "jq -r '.message // empty' | grep . | ~/.local/share/cc-notify/bark-push.sh"
+        "command": "jq -r '.message // empty' | grep . | ~/.local/share/holler/bark-push.sh"
       }
     ]
   }
@@ -135,7 +135,7 @@ Add to `.gemini/settings.json`:
 <summary><strong>Aider</strong></summary>
 
 ```bash
-aider --notifications-command "~/.local/share/cc-notify/bark-push.sh 'Aider is waiting for input'"
+aider --notifications-command "~/.local/share/holler/bark-push.sh 'Aider is waiting for input'"
 ```
 
 </details>
@@ -147,7 +147,7 @@ Add to `config.toml`:
 
 ```toml
 [notify]
-command = "~/.local/share/cc-notify/bark-push.sh 'Codex is waiting for input'"
+command = "~/.local/share/holler/bark-push.sh 'Codex is waiting for input'"
 ```
 
 </details>
@@ -189,7 +189,7 @@ curl -s \
 <summary><strong>Bark</strong></summary>
 
 ```bash
-mkdir -p ~/.local/share/cc-notify ~/.config/containers/systemd
+mkdir -p ~/.local/share/holler ~/.config/containers/systemd
 cp bark/bark.container ~/.config/containers/systemd/
 systemctl --user daemon-reload && systemctl --user start bark
 
@@ -197,12 +197,12 @@ systemctl --user daemon-reload && systemctl --user start bark
 curl http://127.0.0.1:8099/healthz
 
 # Copy bark-push-example.sh and fill in your device key / encryption values
-cp bark/bark-push-example.sh ~/.local/share/cc-notify/bark-push.sh
-chmod +x ~/.local/share/cc-notify/bark-push.sh
+cp bark/bark-push-example.sh ~/.local/share/holler/bark-push.sh
+chmod +x ~/.local/share/holler/bark-push.sh
 # Edit DEVICE_KEY, BASE_URL, ENC_KEY_HEX, ENC_IV_HEX
 
 # Test
-~/.local/share/cc-notify/bark-push.sh 'Hello from cc-notify!'
+~/.local/share/holler/bark-push.sh 'Hello from holler!'
 ```
 
 </details>
@@ -211,8 +211,8 @@ chmod +x ~/.local/share/cc-notify/bark-push.sh
 <summary><strong>ntfy</strong></summary>
 
 ```bash
-mkdir -p ~/.local/share/cc-notify ~/.config/containers/systemd
-cp ntfy/server.yml.template ~/.local/share/cc-notify/server.yml
+mkdir -p ~/.local/share/holler ~/.config/containers/systemd
+cp ntfy/server.yml.template ~/.local/share/holler/server.yml
 # Edit server.yml: set base-url, listen-http, and auth-tokens
 
 cp ntfy/ntfy.container ~/.config/containers/systemd/
@@ -239,15 +239,15 @@ sudo tailscale serve --bg --https 443 http://127.0.0.1:8098   # ntfy
 
 ## Troubleshooting
 
-**Test push:** `~/.local/share/cc-notify/bark-push.sh 'test'` (Bark) or `curl -H "Authorization: Bearer TOKEN" -d "test" http://127.0.0.1:8098/claude` (ntfy)
+**Test push:** `~/.local/share/holler/bark-push.sh 'test'` (Bark) or `curl -H "Authorization: Bearer TOKEN" -d "test" http://127.0.0.1:8098/claude` (ntfy)
 
 **Service not running:** `systemctl --user status bark` / `systemctl --user status ntfy`
 
 **No notification:** Check device key (Bark app main screen) or subscriber credentials (ntfy). Verify phone is on Tailscale network.
 
-**Encryption not working:** Verify the Bark app has matching algorithm (AES-128-CBC), key, and IV under Push Encryption. Values are in `~/.local/share/cc-notify/bark-push.sh`.
+**Encryption not working:** Verify the Bark app has matching algorithm (AES-128-CBC), key, and IV under Push Encryption. Values are in `~/.local/share/holler/bark-push.sh`.
 
-**Hook not firing:** Test the command from `~/.local/share/cc-notify/hooks.json` manually in your terminal.
+**Hook not firing:** Test the command from `~/.local/share/holler/hooks.json` manually in your terminal.
 
 **Podman permission denied:** `systemctl --user enable --now podman.socket`
 

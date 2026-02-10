@@ -2,16 +2,16 @@
 # Install to: ~/.config/containers/systemd/bark.container
 # Then: systemctl --user daemon-reload && systemctl --user start bark
 #
-# Data stored in: ~/.local/share/cc-notify/
+# Data stored in: ~/.local/share/holler/
 
 [Unit]
-Description=Bark push notification server (cc-notify)
+Description=Bark push notification server (holler)
 After=network-online.target
 
 [Container]
 Image=docker.io/finab/bark-server:latest
 ContainerName=bark
-Volume=%h/.local/share/cc-notify:/data:Z
+Volume=%h/.local/share/holler:/data:Z
 # Host port 8099 (configurable), container port 8080 (fixed)
 PublishPort=127.0.0.1:8099:8080
 

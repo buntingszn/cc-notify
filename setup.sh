@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# cc-notify setup — deploy Bark or ntfy with Podman Quadlet for Claude Code hooks
+# holler setup — deploy Bark or ntfy with Podman Quadlet for Claude Code hooks
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-DATA_DIR="$HOME/.local/share/cc-notify"
+DATA_DIR="$HOME/.local/share/holler"
 
 # --- Colors (disabled if not a terminal) ---
 
@@ -388,7 +388,7 @@ print_bark_instructions() {
 
     local push_script="$DATA_DIR/bark-push.sh"
     echo -e "${BOLD}Test it:${RESET}"
-    echo "  ${push_script} 'Hello from cc-notify!'"
+    echo "  ${push_script} 'Hello from holler!'"
 }
 
 # --- ntfy ---
@@ -497,13 +497,13 @@ print_ntfy_instructions() {
     echo
 
     echo -e "${BOLD}Test it:${RESET}"
-    echo "  curl -H 'Authorization: Bearer ${HOOKS_TOKEN}' -d 'Hello from cc-notify!' $BASE_URL/claude"
+    echo "  curl -H 'Authorization: Bearer ${HOOKS_TOKEN}' -d 'Hello from holler!' $BASE_URL/claude"
 }
 
 # --- Main ---
 
 main() {
-    header "cc-notify setup"
+    header "holler setup"
     echo "Self-hosted push notifications for Claude Code."
     echo
 
